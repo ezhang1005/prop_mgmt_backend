@@ -291,3 +291,23 @@ def update_property(property_id: int, prop: PropertyCreate, bq: bigquery.Client 
     """
     bq.query(query).result()
     return {"message": f"Property {property_id} updated successfully"}
+
+@app.delete("/properties/{property_id}", status_code=status.HTTP_200_OK)
+def delete_property(property_id: int, bq: bigquery.Client = Depends(get_bq_client)):
+    """As a landlord, I want to delete a property from my portfolio."""
+    
+    # 1. Check if the property exists first
+    check_q = f"SELECT property_id FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    if not list(bq.query(check_q).result()):
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    # 2. Delete the property record
+    # Note: In a production app, you might also delete from 'income' and 'expenses' tables 
+    # to maintain clean data, but for this MVP, we will just remove the property entry.
+    delete_q = f"DELETE FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    
+    try:
+        bq.query(delete_q).result()
+        return {"message": f"Property {property_id} has been successfully removed from the portfolio."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database Delete Failed: {str(e)}")
