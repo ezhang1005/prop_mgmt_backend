@@ -99,13 +99,28 @@ def get_income(property_id: int, bq: bigquery.Client = Depends(get_bq_client)):
 
 @app.post("/income/{property_id}", status_code=status.HTTP_201_CREATED)
 def create_income(property_id: int, income: IncomeCreate, bq: bigquery.Client = Depends(get_bq_client)):
-    """Creates a new income record for a property[cite: 153]."""
-    query = f"""
-        INSERT INTO `{PROJECT_ID}.{DATASET}.income` (property_id, amount, date, description)
-        VALUES ({property_id}, {income.amount}, '{income.date}', '{income.description}')
+    """Creates a new income record with a guaranteed unique ID."""
+    
+    # 1. Find the current maximum ID in the table
+    max_id_query = f"SELECT MAX(income_id) as max_id FROM `{PROJECT_ID}.{DATASET}.income`"
+    query_job = bq.query(max_id_query)
+    results = list(query_job.result())
+    
+    # 2. Increment it by 1 (or start at 1 if table is empty)
+    current_max = results[0]['max_id'] if results[0]['max_id'] is not None else 0
+    new_id = current_max + 1
+
+    # 3. Perform the Insert
+    insert_query = f"""
+        INSERT INTO `{PROJECT_ID}.{DATASET}.income` (income_id, property_id, amount, date, description)
+        VALUES ({new_id}, {property_id}, {income.amount}, '{income.date}', '{income.description}')
     """
-    bq.query(query).result()
-    return {"message": "Income record created successfully"}
+    
+    try:
+        bq.query(insert_query).result()
+        return {"message": "Income record created successfully", "income_id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database Insert Failed: {str(e)}")
 
 # --- Expenses (Required) ---
 
