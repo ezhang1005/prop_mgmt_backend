@@ -103,14 +103,23 @@ def get_property_by_id(property_id: int, bq: bigquery.Client = Depends(get_bq_cl
 
 @app.get("/income/{property_id}")
 def get_income(property_id: int, bq: bigquery.Client = Depends(get_bq_client)):
-    """Returns all income records for a property[cite: 152]."""
+    """Returns all income records for a property. Returns 404 if property doesn't exist."""
+    # Check if property exists first
+    check_q = f"SELECT property_id FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    if not list(bq.query(check_q).result()):
+        raise HTTPException(status_code=404, detail=f"Property {property_id} not found")
+        
     query = f"SELECT * FROM `{PROJECT_ID}.{DATASET}.income` WHERE property_id = {property_id} ORDER BY date DESC"
     results = bq.query(query).result()
     return [dict(row) for row in results]
 
 @app.post("/income/{property_id}", status_code=status.HTTP_201_CREATED)
 def create_income(property_id: int, income: IncomeCreate, bq: bigquery.Client = Depends(get_bq_client)):
-    """Creates a new income record with a guaranteed unique ID."""
+    """Creates an income record only if the property exists."""
+    # Validation Check
+    check_q = f"SELECT property_id FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    if not list(bq.query(check_q).result()):
+        raise HTTPException(status_code=404, detail="Cannot record income: Property not found")
     
     # 1. Find the current maximum ID in the table
     max_id_query = f"SELECT MAX(income_id) as max_id FROM `{PROJECT_ID}.{DATASET}.income`"
@@ -137,7 +146,12 @@ def create_income(property_id: int, income: IncomeCreate, bq: bigquery.Client = 
 
 @app.get("/expenses/{property_id}")
 def get_expenses(property_id: int, bq: bigquery.Client = Depends(get_bq_client)):
-    """Returns all expense records for a property[cite: 155]."""
+    """Returns all expense records for a property. Returns 404 if property doesn't exist."""
+    # Check if property exists first
+    check_q = f"SELECT property_id FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    if not list(bq.query(check_q).result()):
+        raise HTTPException(status_code=404, detail=f"Property {property_id} not found")
+
     query = f"SELECT * FROM `{PROJECT_ID}.{DATASET}.expenses` WHERE property_id = {property_id} ORDER BY date DESC"
     results = bq.query(query).result()
     return [dict(row) for row in results]
