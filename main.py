@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import bigquery
 from pydantic import BaseModel
 from datetime import date
-from typing import List
+from typing import List, Optional  
+import random
 
 app = FastAPI(title="Property Management API")
 
