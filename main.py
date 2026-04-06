@@ -44,6 +44,16 @@ class ExpenseCreate(BaseModel):
     vendor: str
     description: str
 
+class PropertyCreate(BaseModel):
+    name: str
+    address: str
+    city: str
+    state: str
+    postal_code: str
+    property_type: str
+    tenant_name: Optional[str] = None
+    monthly_rent: float
+
 # ---------------------------------------------------------------------------
 # Properties Req
 # ---------------------------------------------------------------------------
@@ -133,13 +143,28 @@ def get_expenses(property_id: int, bq: bigquery.Client = Depends(get_bq_client))
 
 @app.post("/expenses/{property_id}", status_code=status.HTTP_201_CREATED)
 def create_expense(property_id: int, expense: ExpenseCreate, bq: bigquery.Client = Depends(get_bq_client)):
-    """Creates a new expense record for a property[cite: 156]."""
-    query = f"""
-        INSERT INTO `{PROJECT_ID}.{DATASET}.expenses` (property_id, amount, date, category, vendor, description)
-        VALUES ({property_id}, {expense.amount}, '{expense.date}', '{expense.category}', '{expense.vendor}', '{expense.description}')
+    """Creates a new expense record with a guaranteed unique ID."""
+    
+    # 1. Find the current maximum ID in the expenses table
+    max_id_query = f"SELECT MAX(expense_id) as max_id FROM `{PROJECT_ID}.{DATASET}.expenses`"
+    query_job = bq.query(max_id_query)
+    results = list(query_job.result())
+    
+    # 2. Increment by 1 (default to 1 if the table is empty)
+    current_max = results[0]['max_id'] if results[0]['max_id'] is not None else 0
+    new_id = current_max + 1
+
+    # 3. Perform the Insert with all required fields from IA 8 and seed data
+    insert_query = f"""
+        INSERT INTO `{PROJECT_ID}.{DATASET}.expenses` (expense_id, property_id, amount, date, category, vendor, description)
+        VALUES ({new_id}, {property_id}, {expense.amount}, '{expense.date}', '{expense.category}', '{expense.vendor}', '{expense.description}')
     """
-    bq.query(query).result()
-    return {"message": "Expense record created successfully"}
+    
+    try:
+        bq.query(insert_query).result()
+        return {"message": "Expense record created successfully", "expense_id": new_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database Insert Failed: {str(e)}")
 
 # --- Custom Additional Endpoints ---
 
@@ -187,3 +212,81 @@ def get_portfolio_stats(bq: bigquery.Client = Depends(get_bq_client)):
     """
     results = list(bq.query(query).result())
     return dict(results[0])
+
+@app.get("/analytics/yield/{property_id}")
+def get_property_yield(property_id: int, bq: bigquery.Client = Depends(get_bq_client)):
+    """
+    Calculates the Gross Rental Yield for a property.
+    Formula: (Total Income Received / (Monthly Rent * 12)) * 100
+    """
+    # 1. Get the property's current monthly rent
+    prop_query = f"SELECT monthly_rent FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    prop_results = list(bq.query(prop_query).result())
+    
+    if not prop_results:
+        raise HTTPException(status_code=404, detail="Property not found")
+    
+    monthly_rent = prop_results[0]['monthly_rent']
+    
+    # 2. Get the total historical income for this property
+    income_query = f"SELECT SUM(amount) as total_income FROM `{PROJECT_ID}.{DATASET}.income` WHERE property_id = {property_id}"
+    income_results = list(bq.query(income_query).result())
+    total_income = income_results[0]['total_income'] or 0
+
+    # 3. Calculate Yield (assuming we want to see how current rent compares to historical intake)
+    # Note: In a real scenario, this might involve property purchase price, 
+    # but for Alex's MVP, we'll use annual expected vs actual.
+    annual_expected = monthly_rent * 12
+    yield_percentage = (total_income / annual_expected) * 100 if annual_expected > 0 else 0
+
+    return {
+        "property_id": property_id,
+        "monthly_rent": monthly_rent,
+        "total_historical_income": total_income,
+        "gross_yield_index": round(yield_percentage, 2),
+        "status": "Performing" if yield_percentage > 90 else "Underperforming"
+    }
+
+# --- Property Management (Closing the User Story Gaps) ---
+
+@app.post("/properties", status_code=status.HTTP_201_CREATED)
+def create_property(prop: PropertyCreate, bq: bigquery.Client = Depends(get_bq_client)):
+    """As a landlord, I want to add a new property (User Story 2)"""
+    # 1. Generate New ID
+    max_id_q = f"SELECT MAX(property_id) as max_id FROM `{PROJECT_ID}.{DATASET}.properties`"
+    res = list(bq.query(max_id_q).result())
+    new_id = (res[0]['max_id'] or 0) + 1
+
+    # 2. Insert into BigQuery
+    query = f"""
+        INSERT INTO `{PROJECT_ID}.{DATASET}.properties` 
+        (property_id, name, address, city, state, postal_code, property_type, tenant_name, monthly_rent)
+        VALUES ({new_id}, '{prop.name}', '{prop.address}', '{prop.city}', '{prop.state}', 
+                '{prop.postal_code}', '{prop.property_type}', '{prop.tenant_name}', {prop.monthly_rent})
+    """
+    bq.query(query).result()
+    return {"message": "Property added successfully", "property_id": new_id}
+
+@app.put("/properties/{property_id}")
+def update_property(property_id: int, prop: PropertyCreate, bq: bigquery.Client = Depends(get_bq_client)):
+    """As a landlord, I want to edit property details (User Story 3)"""
+    # First, check if it exists
+    check_q = f"SELECT property_id FROM `{PROJECT_ID}.{DATASET}.properties` WHERE property_id = {property_id}"
+    if not list(bq.query(check_q).result()):
+        raise HTTPException(status_code=404, detail="Property not found")
+
+    # Perform the update
+    query = f"""
+        UPDATE `{PROJECT_ID}.{DATASET}.properties`
+        SET name = '{prop.name}', 
+            address = '{prop.address}', 
+            city = '{prop.city}', 
+            state = '{prop.state}', 
+            postal_code = '{prop.postal_code}', 
+            property_type = '{prop.property_type}', 
+            tenant_name = '{prop.tenant_name}', 
+            monthly_rent = {prop.monthly_rent}
+        WHERE property_id = {property_id}
+    """
+    bq.query(query).result()
+    return {"message": f"Property {property_id} updated successfully"}
